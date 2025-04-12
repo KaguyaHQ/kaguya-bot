@@ -1,0 +1,13 @@
+{application,kaguyabot,
+             [{config_mtime,1744476279},
+              {optional_applications,[]},
+              {applications,[kernel,stdlib,elixir,logger,req,dotenvy,ecto_sql,
+                             postgrex]},
+              {description,"kaguyabot"},
+              {modules,['Elixir.Kaguyabot.Application',
+                        'Elixir.Kaguyabot.CommentPoller',
+                        'Elixir.Kaguyabot.GraphQLClient',
+                        'Elixir.Kaguyabot.Repo']},
+              {registered,[]},
+              {vsn,"0.1.0"},
+              {mod,{'Elixir.Kaguyabot.Application',[]}}]}.
