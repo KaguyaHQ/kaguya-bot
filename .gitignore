@@ -28,4 +28,5 @@ kaguyabot-*.tar
 # Environment variables
 .env
 
-/elixir_ls
+# .elixir_ls files
+.elixir_ls/
