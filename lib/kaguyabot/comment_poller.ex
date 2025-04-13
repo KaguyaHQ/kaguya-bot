@@ -2,6 +2,11 @@ defmodule Kaguyabot.CommentPoller do
   use GenServer
   require Logger
 
+  alias Kaguyabot.Repo
+  alias Kaguyabot.CommentInvocation
+  alias Kaguyabot.GraphQLClient
+  import Ecto.Query
+
   @subreddit "kaguya"
   # Matches either {{...}} or { ... } (non-greedy for the inner content)
   @trigger_regex ~r/\{\{([^}]+)\}\}|\{([^}]+)\}/
@@ -61,51 +66,104 @@ defmodule Kaguyabot.CommentPoller do
     end
   end
 
+  # Modified maybe_handle_comment/2 to check and log invocation
   defp maybe_handle_comment(%{"body" => body, "id" => id, "author" => author}, token) do
-    # Use Regex.scan to support multiple trigger occurrences in one comment.
-    case Regex.scan(@trigger_regex, body) do
-      [] ->
-        :ignore
+    # Check if we've already handled this comment
+    if Repo.exists?(from(ci in CommentInvocation, where: ci.comment_id == ^id)) do
+      Logger.info("Already handled comment #{id}, skipping.")
+      :ignore
+    else
+      case Regex.scan(@trigger_regex, body) do
+        [] ->
+          :ignore
 
-      matches ->
-        Enum.each(matches, fn match ->
-          # Extract the matched group. Either group 1 or 2 will be non-nil.
-          raw_query = Enum.find(match, fn group -> group != nil and group != "" end)
-          # Clean user input: trim spaces and trailing punctuation.
-          book_query = raw_query |> String.trim() |> String.trim_trailing("`")
-          Logger.info("Matched comment by #{author}: #{book_query}")
+        matches ->
+          Enum.each(matches, fn match ->
+            # Extract the matched group; either group 1 or group 2 will be non-nil.
+            raw_query = Enum.find(match, fn group -> group != nil and group != "" end)
+            # Clean the user input: trim spaces and trailing punctuation.
+            book_query = raw_query |> String.trim() |> String.trim_trailing("`")
+            Logger.info("Matched comment by #{author}: #{book_query}")
 
-          case Kaguyabot.GraphQLClient.search_books(book_query) do
-            {:ok, response} ->
-              books = get_in(response, ["data", "search_books", "items"]) || []
+            case GraphQLClient.search_books(book_query) do
+              {:ok, response} ->
+                books = get_in(response, ["data", "search_books", "items"]) || []
 
-              reply =
-                if books == [] do
-                  "Sorry, couldn't find any matching books for **#{book_query}**."
-                else
-                  format_reply(books)
+                reply =
+                  if books == [] do
+                    "Sorry, couldn't find any matching books for **#{book_query}**."
+                  else
+                    format_reply(books)
+                  end
+
+                Logger.info("Reply: #{reply}")
+
+                # Build Reddit thing_id (prefix "t1_" to comment ID)
+                parent_id = "t1_" <> id
+
+                # Attempt to post a reply
+                reply_result = post_reply(token, parent_id, reply)
+
+                case reply_result do
+                  {:ok, %{status: 200}} ->
+                    Logger.info("✅ Replied to comment #{parent_id}")
+
+                    mark_invocation(
+                      id,
+                      books,
+                      author,
+                      true,
+                      if books == [] do
+                        "book not found"
+                      else
+                        "success"
+                      end
+                    )
+
+                  {:ok, %{status: status}} ->
+                    Logger.error("❌ Failed to reply (status: #{status}) for comment #{parent_id}")
+                    mark_invocation(id, nil, author, false, "Failed with status: #{status}")
+
+                  {:error, err} ->
+                    Logger.error(
+                      "❌ Error posting reply for comment #{parent_id}: #{inspect(err)}"
+                    )
+
+                    mark_invocation(id, nil, author, false, "Error: #{inspect(err)}")
                 end
 
-              Logger.info("Reply: #{reply}")
+              {:error, error} ->
+                Logger.error("Error searching books for '#{book_query}': #{inspect(error)}")
+                mark_invocation(id, nil, author, false, "GraphQL error: #{inspect(error)}")
+            end
+          end)
+      end
+    end
+  end
 
-              # Build Reddit thing_id using the comment id: Reddit IDs for comments are prefixed with "t1_".
-              parent_id = "t1_" <> id
+  defp mark_invocation(comment_id, books, invoked_by, responded, note) do
+    book_id =
+      case books do
+        [%{"id" => id} | _] -> id
+        _ -> nil
+      end
 
-              case post_reply(token, parent_id, reply) do
-                {:ok, %{status: 200}} ->
-                  Logger.info("✅ Replied to comment #{parent_id}")
+    record = %CommentInvocation{
+      comment_id: comment_id,
+      book_id: book_id,
+      subreddit: @subreddit,
+      invoked_by: invoked_by,
+      invoked_at: DateTime.utc_now(),
+      responded: responded,
+      note: note
+    }
 
-                {:ok, %{status: status}} ->
-                  Logger.error("❌ Failed to reply (status: #{status}) for comment #{parent_id}")
+    case Repo.insert(record, on_conflict: :nothing) do
+      {:ok, _record} ->
+        :ok
 
-                {:error, err} ->
-                  Logger.error("❌ Error posting reply for comment #{parent_id}: #{inspect(err)}")
-              end
-
-            {:error, error} ->
-              Logger.error("Error searching books for '#{book_query}': #{inspect(error)}")
-          end
-        end)
+      {:error, error} ->
+        Logger.error("Failed to insert invocation: #{inspect(error)}")
     end
   end
 
@@ -117,7 +175,7 @@ defmodule Kaguyabot.CommentPoller do
     slug = first_book["slug"]
     fallback_authors = first_book["authors"] || ["Unknown author"]
 
-    case Kaguyabot.GraphQLClient.get_book_details(id) do
+    case GraphQLClient.get_book_details(id) do
       {:ok, book_details} ->
         authors =
           book_details["authors"]
