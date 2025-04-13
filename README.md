@@ -56,6 +56,7 @@ REDDIT_USER_AGENT=kaguyabot:v0.1.0 (by /u/yourusername)
 Then run the bot:
 
 mix run --no-halt
+```
 
 🛠️ Configuration
 

@@ -5,9 +5,7 @@ defmodule Kaguyabot.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      Kaguyabot.CommentPoller
-    ]
+    children = [Kaguyabot.Repo, Kaguyabot.CommentPoller]
 
     opts = [strategy: :one_for_one, name: Kaguyabot.Supervisor]
     Supervisor.start_link(children, opts)

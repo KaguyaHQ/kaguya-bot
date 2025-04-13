@@ -4,7 +4,7 @@ defmodule Kaguyabot.Repo.Migrations.CreateCommentInvocations do
   def change do
     create table(:comment_invocations) do
       add :comment_id, :string, null: false
-      add :book_id, references(:books, type: :uuid, on_delete: :nilify_all)
+      add :book_id, :uuid
       add :subreddit, :string, null: false
       add :invoked_by, :string, null: false
       add :invoked_at, :utc_datetime_usec, null: false
